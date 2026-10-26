@@ -21,10 +21,15 @@ class PosedImageStream(Dataset):
     ):
         self.stride = stride
 
-        self.rgb_list = \
-            sorted(list(Path(image_dir).glob('*.[p|j][n|p]g')))[::stride]
+        self.rgb_list = sorted([
+            path for path in Path(image_dir).iterdir()
+            if path.suffix.lower() in ['.jpg', '.jpeg', '.png']
+        ])[::stride]
         self.depth_list = None if not depth_dir \
-            else sorted(list(Path(depth_dir).glob('*.npy')))[::stride]
+            else sorted([
+                path for path in Path(depth_dir).iterdir()
+                if path.suffix.lower() in ['.npy', '.png']
+            ])[::stride]
         self.pose_list = None if not traje_dir \
             else sorted(list(Path(traje_dir).glob('*.txt')))[::stride]
 
@@ -60,7 +65,14 @@ class PosedImageStream(Dataset):
 
     def __getitem__(self, idx) -> Tuple[np.ndarray, np.ndarray, np.ndarray]:
         raw_rgb = cv2.imread(str(self.rgb_list[idx]), cv2.IMREAD_COLOR).astype(np.uint8)
-        raw_depth = None if not self.depth_list else np.load(self.depth_list[idx])
+        if not self.depth_list:
+            raw_depth = None
+        elif self.depth_list[idx].suffix.lower() == '.npy':
+            raw_depth = np.load(self.depth_list[idx])
+        else:
+            raw_depth = cv2.imread(
+                str(self.depth_list[idx]), cv2.IMREAD_UNCHANGED
+            ).astype(np.float32) / 100.0
         # process data
         rgb = cv2.resize(raw_rgb, self.resize) if self.resize else raw_rgb
         depth = None if not self.depth_list else (cv2.resize(raw_depth, self.resize) if self.resize else raw_depth)

@@ -42,6 +42,8 @@ class Options:
     trajectory_path: Path = None
     poses_dir: Path = None
     global_ba_frontend: int = 0
+    final_backend: bool = True
+    progress_desc: str = None
 
 def show_image(image):
     image = image.permute(1, 2, 0).cpu().numpy()
@@ -101,7 +103,9 @@ def run(
         resize=(512, 384)
     )
 
-    for t, (image, depth, intr) in tqdm(enumerate(dataset)):
+    for t, (image, depth, intr) in tqdm(
+        enumerate(dataset), total=len(dataset), desc=setting.progress_desc
+    ):
         if t < setting.t0:
             continue
         # show image if visualize
@@ -143,3 +147,4 @@ def run(
         trajectory_to_poses(traj_est, setting.poses_dir)
     
     print('finished')
+    return traj_est
