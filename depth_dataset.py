@@ -9,6 +9,7 @@ import os
 # third party
 import cv2
 import numpy as np
+from PIL import Image
 from tqdm import tqdm
 
 # metric 3d
@@ -28,9 +29,13 @@ def main(
     checkpoint="./weights/metric_depth_vit_giant2_800k.pth",
     model_name="v2-g",
 ):
-    # load per-scene intrinsics
-    with open(intrinsic_json, "r") as file:
-        intrinsics = json.load(file)
+    # Accept either legacy per-scene JSON or per-frame <scene>.txt tables.
+    intrinsic_source = Path(intrinsic_json).resolve()
+    if intrinsic_source.is_dir():
+        intrinsics = intrinsic_source
+    else:
+        with intrinsic_source.open("r") as file:
+            intrinsics = json.load(file)
 
     # init metric 3d once for all scenes
     metric = Metric(checkpoint=checkpoint, model_name=model_name)
@@ -44,8 +49,12 @@ def main(
     os.makedirs(dataset_dir, exist_ok=True)
 
     for scene in tqdm(scenes, desc="scenes"):
-        # load this scene's intrinsic
-        intr = np.asarray(intrinsics[scene.name], dtype=np.float32)[:4]
+        if isinstance(intrinsics, dict):
+            scene_intrinsics = np.asarray(intrinsics[scene.name], dtype=np.float32)[:4]
+        else:
+            scene_intrinsics = np.loadtxt(
+                intrinsics / f"{scene.name}.txt", dtype=np.float32, ndmin=2
+            )
 
         # load JPG, JPEG, or PNG images
         image_dir = scene / "image_2"
@@ -62,10 +71,16 @@ def main(
         if save_colormap:
             os.makedirs(color_dir, exist_ok=True)
 
-        for image in tqdm(images, desc=f"scene {scene.name}", leave=False):
+        for index, image in enumerate(tqdm(images, desc=f"scene {scene.name}", leave=False)):
             depth_path = out_dir / f"{image.stem}.png"
             if overwrite or not depth_path.exists():
-                depth = metric(rgb_image=image, intrinsic=intr, d_max=d_max)
+                intr = scene_intrinsics[index, :4] if scene_intrinsics.ndim == 2 else scene_intrinsics
+                # Keep the original PIL decoding; only expand single-channel grayscale.
+                with Image.open(image) as loaded_image:
+                    rgb_image = np.array(
+                        loaded_image.convert("RGB") if loaded_image.mode == "L" else loaded_image
+                    )
+                depth = metric(rgb_image=rgb_image, intrinsic=intr, d_max=d_max)
 
                 # save metric depth as uint16 centimetres
                 depth_png = np.nan_to_num(depth, nan=0.0, posinf=0.0, neginf=0.0)
@@ -85,7 +100,10 @@ if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Running Metric3D on multiple scenes")
     parser.add_argument("--sequences", type=str, required=True, help="directory containing scenes")
     parser.add_argument("--dataset", type=str, required=True, help="dataset output name")
-    parser.add_argument("--intr", type=str, required=True, help="per-scene intrinsic JSON")
+    parser.add_argument(
+        "--intr", type=str, required=True,
+        help="per-scene JSON, or directory of <scene>.txt files with one fx fy cx cy row per sorted image",
+    )
     parser.add_argument("--out", type=str, default="/data/lei/metric3dv2/gt_K", help="output root")
     parser.add_argument("--out-colormap", action="store_true", default=False)
     parser.add_argument("--dmax", type=float, default=300.0)
