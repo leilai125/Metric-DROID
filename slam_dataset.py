@@ -23,6 +23,21 @@ IMAGE_SUFFIXES = {".jpg", ".jpeg", ".png"}
 METRIC_NAMES = ("ave_translation", "ave_rotation", "ate", "ave_scale_error")
 
 
+def load_intrinsics(source):
+    """Load fixed scene intrinsics from JSON or the first row of each scene TXT."""
+    source = Path(source)
+    if source.is_dir():
+        return {
+            path.stem: np.loadtxt(path, dtype=np.float32, max_rows=1, ndmin=1)
+            for path in sorted(source.glob("*.txt"))
+        }
+    with source.open("r", encoding="utf-8") as file:
+        return {
+            scene: np.asarray(values, dtype=np.float32)
+            for scene, values in json.load(file).items()
+        }
+
+
 def run_scene(image_dir, depth_dir, intrinsic, checkpoint, buffer, progress_desc):
     options = Droid.Options()
     options.intrinsic = intrinsic
@@ -62,8 +77,13 @@ def main():
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--dataset-root", type=Path, required=True)
+    parser.add_argument("--scenes", nargs="+", help="scene folder names to process (default: all)")
     parser.add_argument("--depth-root", type=Path, required=True)
-    parser.add_argument("--intrinsics-json", type=Path, required=True)
+    parser.add_argument(
+        "--intrinsics", "--intrinsics-json", dest="intrinsics", type=Path, required=True,
+        help="Per-scene JSON, or directory of <scene>.txt files with fx fy cx cy rows; "
+             "the first TXT row is used for every image in that scene",
+    )
     parser.add_argument("--gt-dir", type=Path, required=True)
     parser.add_argument("--dataset-name", required=True)
     parser.add_argument("--image-subdir", default="image_2")
@@ -80,8 +100,8 @@ def main():
     gt_dir = args.gt_dir.resolve()
     output_dir = (args.output_root / args.dataset_name).resolve()
 
-    with args.intrinsics_json.open("r", encoding="utf-8") as file:
-        intrinsics = json.load(file)
+    intrinsics_source = args.intrinsics.resolve()
+    intrinsics = load_intrinsics(intrinsics_source)
 
     scenes = sorted(
         scene
@@ -90,6 +110,8 @@ def main():
         and (depth_root / scene).is_dir()
         and (gt_dir / f"{scene}.txt").is_file()
     )
+    if args.scenes is not None:
+        scenes = [scene for scene in scenes if scene in args.scenes]
     if not scenes:
         raise ValueError("No scenes have images, depth, intrinsics, and ground truth")
 
@@ -103,6 +125,8 @@ def main():
     print(f"Dataset: {args.dataset_name}")
     print(f"Scenes: {len(scenes)}")
     print(f"Output: {output_dir}")
+    print(f"Intrinsics: {intrinsics_source}")
+    print("Intrinsics are fixed per scene; TXT input uses the first image's estimate")
     print(f"Keyframe buffer: {args.buffer}")
     print("Frontend global BA: disabled")
     print("Final backend optimization: disabled")
@@ -123,13 +147,14 @@ def main():
         )
 
         print(f"\n[{scene}] {image_count} images")
+        print(f"[{scene}] Fixed intrinsics [fx, fy, cx, cy]: {intrinsics[scene].tolist()}")
         if raw_path.exists() and not args.overwrite:
             print(f"[{scene}] Reusing {raw_path}")
         else:
             trajectory = run_scene(
                 image_dir=image_dir,
                 depth_dir=depth_dir,
-                intrinsic=np.asarray(intrinsics[scene], dtype=np.float32),
+                intrinsic=intrinsics[scene],
                 checkpoint=args.checkpoint,
                 buffer=args.buffer,
                 progress_desc=f"{args.dataset_name} {scene}",
@@ -175,6 +200,7 @@ def main():
 
         scene_metrics[scene] = {
             "num_poses": image_count,
+            "intrinsics": intrinsics[scene].tolist(),
             "before_alignment": before_metrics,
             "after_alignment": after_metrics,
             "sim3": sim3_result,
@@ -195,6 +221,8 @@ def main():
         "dataset": args.dataset_name,
         "alignment": "Sim(3) / 7DoF",
         "settings": {
+            "intrinsics_source": str(intrinsics_source),
+            "intrinsics_mode": "first_frame" if intrinsics_source.is_dir() else "per_scene",
             "buffer": args.buffer,
             "global_ba_frontend": 0,
             "final_backend": False,

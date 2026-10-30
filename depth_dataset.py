@@ -28,6 +28,7 @@ def main(
     save_colormap=False,
     checkpoint="./weights/metric_depth_vit_giant2_800k.pth",
     model_name="v2-g",
+    scene_names=None,
 ):
     # Accept either legacy per-scene JSON or per-frame <scene>.txt tables.
     intrinsic_source = Path(intrinsic_json).resolve()
@@ -43,6 +44,8 @@ def main(
     # load scenes
     sequences_dir = Path(input_sequences).resolve()
     scenes = sorted(path for path in sequences_dir.iterdir() if path.is_dir())
+    if scene_names is not None:
+        scenes = [scene for scene in scenes if scene.name in scene_names]
 
     # create dataset output directory
     dataset_dir = Path(output_root).resolve() / dataset_name
@@ -99,6 +102,7 @@ def main(
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description="Running Metric3D on multiple scenes")
     parser.add_argument("--sequences", type=str, required=True, help="directory containing scenes")
+    parser.add_argument("--scenes", nargs="+", help="scene folder names to process (default: all)")
     parser.add_argument("--dataset", type=str, required=True, help="dataset output name")
     parser.add_argument(
         "--intr", type=str, required=True,
@@ -122,4 +126,5 @@ if __name__ == "__main__":
         save_colormap=args.out_colormap,
         checkpoint=args.checkpoint,
         model_name=args.model_name,
+        scene_names=args.scenes,
     )
